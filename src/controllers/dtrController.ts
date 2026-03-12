@@ -1,6 +1,29 @@
 import { Request, Response } from 'express';
 import { supabase } from '../lib/supabase';
 
+function toRadians(deg: number) {
+  return (deg * Math.PI) / 180;
+}
+
+function haversineDistanceMeters(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+) {
+  const R = 6371000; // metres
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // GET /api/dtr?employee_id=1&date=2024-02-01
 export async function getDTR(req: Request, res: Response) {
   const { employee_id, date } = req.query;
@@ -27,11 +50,51 @@ export async function getDTR(req: Request, res: Response) {
 
 // POST /api/dtr/time-in
 export async function timeIn(req: Request, res: Response) {
-  const { employee_id, work_date, shift_start, shift_end, latitude, longitude } = req.body;
+  const {
+    employee_id,
+    work_date,
+    shift_start,
+    shift_end,
+    latitude,
+    longitude,
+    site_id,
+  } = req.body;
 
-  if (!employee_id || !work_date) {
-    res.status(400).json({ error: 'employee_id and work_date are required' });
+  if (!employee_id || !work_date || !site_id) {
+    res.status(400).json({ error: 'employee_id, work_date, and site_id are required' });
     return;
+  }
+
+  // Validate site
+  const { data: site, error: siteError } = await supabase
+    .from('sites')
+    .select('site_id, latitude, longitude, radius_m')
+    .eq('site_id', site_id)
+    .single();
+
+  if (siteError || !site) {
+    res.status(400).json({ error: 'Invalid site_id for time-in' });
+    return;
+  }
+
+  // Optional geo-radius check when both sides have coordinates
+  if (
+    site.latitude != null &&
+    site.longitude != null &&
+    latitude != null &&
+    longitude != null
+  ) {
+    const radius = site.radius_m ?? 200; // default 200m if not set
+    const distance = haversineDistanceMeters(
+      site.latitude,
+      site.longitude,
+      Number(latitude),
+      Number(longitude)
+    );
+    if (distance > radius) {
+      res.status(403).json({ error: 'You are not within the allowed area for this site.' });
+      return;
+    }
   }
 
   // Prevent duplicate time-in for same day
@@ -58,6 +121,7 @@ export async function timeIn(req: Request, res: Response) {
       shift_end: shift_end ?? null,
       latitude: latitude ?? null,
       longitude: longitude ?? null,
+      site_id,
     })
     .select()
     .single();
@@ -72,19 +136,19 @@ export async function timeIn(req: Request, res: Response) {
 
 // POST /api/dtr/time-out
 export async function timeOut(req: Request, res: Response) {
-  const { employee_id, dtr_id } = req.body;
+  const { employee_id, dtr_id, latitude, longitude, site_id } = req.body;
 
-  if (!employee_id || !dtr_id) {
-    res.status(400).json({ error: 'employee_id and dtr_id are required' });
+  if (!employee_id || !dtr_id || !site_id) {
+    res.status(400).json({ error: 'employee_id, dtr_id, and site_id are required' });
     return;
   }
 
   const timeOutNow = new Date();
 
-  // Fetch time_in to compute hours_worked
+  // Fetch record to compute hours and validate site
   const { data: record, error: fetchError } = await supabase
     .from('dtr_records')
-    .select('time_in')
+    .select('time_in, site_id')
     .eq('dtr_id', dtr_id)
     .eq('employee_id', employee_id)
     .single();
@@ -92,6 +156,42 @@ export async function timeOut(req: Request, res: Response) {
   if (fetchError || !record) {
     res.status(404).json({ error: 'DTR record not found' });
     return;
+  }
+
+  if (record.site_id && record.site_id !== site_id) {
+    res.status(400).json({ error: 'Site does not match original time-in location.' });
+    return;
+  }
+
+  // Validate site again (same as time-in)
+  const { data: site, error: siteError } = await supabase
+    .from('sites')
+    .select('site_id, latitude, longitude, radius_m')
+    .eq('site_id', site_id)
+    .single();
+
+  if (siteError || !site) {
+    res.status(400).json({ error: 'Invalid site_id for time-out' });
+    return;
+  }
+
+  if (
+    site.latitude != null &&
+    site.longitude != null &&
+    latitude != null &&
+    longitude != null
+  ) {
+    const radius = site.radius_m ?? 200;
+    const distance = haversineDistanceMeters(
+      site.latitude,
+      site.longitude,
+      Number(latitude),
+      Number(longitude)
+    );
+    if (distance > radius) {
+      res.status(403).json({ error: 'You are not within the allowed area for this site.' });
+      return;
+    }
   }
 
   const hoursWorked =
@@ -346,3 +446,4 @@ export async function getDTRSummary(req: Request, res: Response) {
 
   res.json(summary);
 }
+
