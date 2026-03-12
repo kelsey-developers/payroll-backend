@@ -1,29 +1,28 @@
+// PATH: back-end/src/index.ts
+
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
-import dtrRoutes from './routes/dtr';
-import payrollRoutes from './routes/payroll';
-import employeeRoutes from './routes/employees';
-
 dotenv.config();
 
-const app = express();
-const PORT = process.env.PORT ?? 4000;
+import dtrRoutes from './routes/dtr';
+import payrollRoutes from './routes/payroll';
+import unitRoutes from './routes/units';
+import paymentRoutes from './routes/payments';
+import employeeRoutes from './routes/employees';
 
-app.use(cors({ origin: '*' }));
+const app = express();
+
+app.use(cors());
 app.use(express.json());
 
-// Routes
 app.use('/api/dtr', dtrRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/units', unitRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/employees', employeeRoutes);
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
-});
-
-app.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`);
+app.listen(process.env.PORT || 4000, () => {
+  console.log(`Server running on port ${process.env.PORT || 4000}`);
 });

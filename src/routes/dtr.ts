@@ -1,14 +1,24 @@
-import { Router } from 'express';
-import multer from 'multer';
-import { getDTR, timeIn, timeOut, getTasks, uploadTask } from '../controllers/dtrController';
+// PATH: back-end/src/routes/dtr.ts
 
-const router = Router();
+import express from 'express';
+import multer from 'multer';
+import {
+  getDTRByEmployee,
+  getTodayDTR,
+  getEmployeeTasks,
+  clockIn,
+  clockOut,
+  uploadTaskProof,
+} from '../controllers/dtrController';
+
+const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.get('/', getDTR);
-router.post('/time-in', timeIn);
-router.post('/time-out', timeOut);
-router.get('/tasks', getTasks);
-router.post('/tasks', upload.single('file'), uploadTask);
+router.get('/employee/:employeeId', getDTRByEmployee);
+router.get('/employee/:employeeId/today', getTodayDTR);
+router.get('/employee/:employeeId/tasks', getEmployeeTasks);
+router.post('/clock-in', clockIn);
+router.patch('/:dtrId/clock-out', clockOut);
+router.post('/:dtrId/employee/:employeeId/proof', upload.single('photo'), uploadTaskProof);
 
 export default router;

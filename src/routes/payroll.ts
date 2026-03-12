@@ -1,21 +1,24 @@
-import { Router } from 'express';
+// PATH: back-end/src/routes/payroll.ts
+
+import express from 'express';
+import multer from 'multer';
 import {
-  getPayroll,
+  getPayrollByType,
   getPayrollById,
-  markCommissionPaid,
+  getPayrollRecords,
   generatePayroll,
-  previewPayroll,
+  markCommissionPaid,
+  uploadGcashReceipt,
 } from '../controllers/payrollController';
 
-const router = Router();
+const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
-// Specific routes first — must come before /:id to avoid param capture
-router.post('/generate', generatePayroll);
-router.post('/preview', previewPayroll);
-router.patch('/commission/mark-paid', markCommissionPaid);
-
-// Parameterized routes last
-router.get('/', getPayroll);
+router.get('/by-type/:type', getPayrollByType);
+router.get('/employee/:employeeId', getPayrollRecords);
 router.get('/:id', getPayrollById);
+router.post('/generate', generatePayroll);
+router.patch('/commission/mark-paid', markCommissionPaid);
+router.post('/commissions/:commissionId/receipt', upload.single('receipt'), uploadGcashReceipt);
 
 export default router;

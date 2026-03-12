@@ -1,22 +1,11 @@
-import { Router } from 'express';
-import { supabase } from '../lib/supabase';
+// PATH: back-end/src/routes/employees.ts
 
-const router = Router();
+import express from 'express';
+import { getAllEmployees, getEmployeeById } from '../controllers/employeesController';
 
-// GET /api/employees
-router.get('/', async (_req, res) => {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('employee_id, full_name, position, employee_code, role, employment_type, status')
-    .eq('status', 'active')
-    .order('full_name', { ascending: true });
+const router = express.Router();
 
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
-  }
-
-  res.json(data ?? []);
-});
+router.get('/', getAllEmployees);
+router.get('/:employeeId', getEmployeeById);
 
 export default router;

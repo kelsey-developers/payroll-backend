@@ -1,195 +1,119 @@
+// PATH: back-end/src/controllers/dtrController.ts
+
 import { Request, Response } from 'express';
 import { supabase } from '../lib/supabase';
+import { uploadFile } from '../lib/storage';
 
-// GET /api/dtr?employee_id=1&date=2024-02-01
-export async function getDTR(req: Request, res: Response) {
-  const { employee_id, date } = req.query;
-
-  if (!employee_id || !date) {
-    res.status(400).json({ error: 'employee_id and date are required' });
-    return;
-  }
+// GET all DTR records for an employee
+export const getDTRByEmployee = async (req: Request, res: Response) => {
+  const { employeeId } = req.params;
 
   const { data, error } = await supabase
     .from('dtr_records')
     .select('*')
-    .eq('employee_id', employee_id)
-    .eq('work_date', date)
+    .eq('employee_id', employeeId)
+    .order('work_date', { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data);
+};
+
+// GET today's DTR record for an employee
+export const getTodayDTR = async (req: Request, res: Response) => {
+  const { employeeId } = req.params;
+  const today = new Date().toISOString().split('T')[0];
+
+  const { data, error } = await supabase
+    .from('dtr_records')
+    .select('*')
+    .eq('employee_id', employeeId)
+    .eq('work_date', today)
     .single();
 
   if (error && error.code !== 'PGRST116') {
-    res.status(500).json({ error: error.message });
-    return;
+    return res.status(500).json({ error: error.message });
   }
+  return res.json(data ?? null);
+};
 
-  res.json(data ?? null);
-}
+// GET task logs for an employee
+export const getEmployeeTasks = async (req: Request, res: Response) => {
+  const { employeeId } = req.params;
 
-// POST /api/dtr/time-in
-export async function timeIn(req: Request, res: Response) {
-  const { employee_id, work_date, shift_start, shift_end } = req.body;
+  const { data, error } = await supabase
+    .from('task_logs')
+    .select('*')
+    .eq('employee_id', employeeId)
+    .order('completed_at', { ascending: false });
 
-  if (!employee_id || !work_date) {
-    res.status(400).json({ error: 'employee_id and work_date are required' });
-    return;
-  }
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data);
+};
 
-  // Prevent duplicate time-in for same day
-  const { data: existing } = await supabase
-    .from('dtr_records')
-    .select('dtr_id')
-    .eq('employee_id', employee_id)
-    .eq('work_date', work_date)
-    .single();
-
-  if (existing) {
-    res.status(409).json({ error: 'Already timed in for today' });
-    return;
-  }
+// POST clock in
+export const clockIn = async (req: Request, res: Response) => {
+  const { employeeId, siteId, latitude, longitude } = req.body;
 
   const { data, error } = await supabase
     .from('dtr_records')
     .insert({
-      employee_id,
-      work_date,
+      employee_id: employeeId,
+      work_date: new Date().toISOString().split('T')[0],
       time_in: new Date().toISOString(),
       status: 'OPEN',
-      shift_start: shift_start ?? null,
-      shift_end: shift_end ?? null,
+      site_id: siteId ?? null,
+      latitude: latitude ?? null,
+      longitude: longitude ?? null,
     })
     .select()
     .single();
 
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
-  }
+  if (error) return res.status(500).json({ error: error.message });
+  return res.status(201).json(data);
+};
 
-  res.status(201).json(data);
-}
-
-// POST /api/dtr/time-out
-export async function timeOut(req: Request, res: Response) {
-  const { employee_id, dtr_id } = req.body;
-
-  if (!employee_id || !dtr_id) {
-    res.status(400).json({ error: 'employee_id and dtr_id are required' });
-    return;
-  }
-
-  const timeOutNow = new Date();
-
-  // Fetch time_in to compute hours_worked
-  const { data: record, error: fetchError } = await supabase
-    .from('dtr_records')
-    .select('time_in')
-    .eq('dtr_id', dtr_id)
-    .eq('employee_id', employee_id)
-    .single();
-
-  if (fetchError || !record) {
-    res.status(404).json({ error: 'DTR record not found' });
-    return;
-  }
-
-  const hoursWorked =
-    (timeOutNow.getTime() - new Date(record.time_in).getTime()) / 1000 / 3600;
+// PATCH clock out
+export const clockOut = async (req: Request, res: Response) => {
+  const { dtrId } = req.params;
+  const { hoursWorked } = req.body;
 
   const { data, error } = await supabase
     .from('dtr_records')
     .update({
-      time_out: timeOutNow.toISOString(),
-      hours_worked: parseFloat(hoursWorked.toFixed(2)),
+      time_out: new Date().toISOString(),
+      hours_worked: hoursWorked,
       status: 'CLOSED',
     })
-    .eq('dtr_id', dtr_id)
+    .eq('dtr_id', dtrId)
     .select()
     .single();
 
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
-  }
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json(data);
+};
 
-  res.json(data);
-}
-
-// GET /api/tasks?employee_id=1&date=2024-02-01
-export async function getTasks(req: Request, res: Response) {
-  const { employee_id, date } = req.query;
-
-  if (!employee_id || !date) {
-    res.status(400).json({ error: 'employee_id and date are required' });
-    return;
-  }
-
-  const start = `${date}T00:00:00.000Z`;
-  const end = `${date}T23:59:59.999Z`;
-
-  const { data, error } = await supabase
-    .from('task_logs')
-    .select('*')
-    .eq('employee_id', employee_id)
-    .gte('completed_at', start)
-    .lte('completed_at', end)
-    .order('completed_at', { ascending: true });
-
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
-  }
-
-  res.json(data ?? []);
-}
-
-// POST /api/tasks  (multipart/form-data)
-export async function uploadTask(req: Request, res: Response) {
-  const { employee_id, dtr_id, task_type, location, completed_at } = req.body;
+// POST upload task proof photo
+export const uploadTaskProof = async (req: Request, res: Response) => {
+  const { dtrId, employeeId } = req.params;
   const file = req.file;
 
-  if (!employee_id || !dtr_id || !task_type || !location) {
-    res.status(400).json({ error: 'employee_id, dtr_id, task_type, and location are required' });
-    return;
+  if (!file) return res.status(400).json({ error: 'No file uploaded' });
+
+  try {
+    const path = `${employeeId}/${dtrId}/${Date.now()}.jpg`;
+    const url = await uploadFile('task-proof-photos', path, file.buffer, file.mimetype);
+
+    const { data, error } = await supabase
+      .from('task_logs')
+      .update({ proof_photo_url: url })
+      .eq('dtr_id', dtrId)
+      .eq('employee_id', employeeId)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-
-  let proof_photo_url = '';
-
-  if (file) {
-    const fileName = `task-photos/${employee_id}/${Date.now()}-${file.originalname}`;
-    const { error: uploadError } = await supabase.storage
-      .from('task-photos')
-      .upload(fileName, file.buffer, { contentType: file.mimetype });
-
-    if (uploadError) {
-      res.status(500).json({ error: 'Failed to upload photo: ' + uploadError.message });
-      return;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from('task-photos')
-      .getPublicUrl(fileName);
-
-    proof_photo_url = urlData.publicUrl;
-  }
-
-  const { data, error } = await supabase
-    .from('task_logs')
-    .insert({
-      dtr_id: Number(dtr_id),
-      employee_id: Number(employee_id),
-      unit_name: location,
-      task_type,
-      proof_photo_url,
-      completed_at: completed_at ?? new Date().toISOString(),
-      status: 'COMPLETED',
-    })
-    .select()
-    .single();
-
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
-  }
-
-  res.status(201).json(data);
-}
+};
