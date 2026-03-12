@@ -5,6 +5,7 @@ import {
   markCommissionPaid,
   generatePayroll,
   previewPayroll,
+  updatePayrollStatus,
 } from '../controllers/payrollController';
 
 const router = Router();
@@ -17,5 +18,6 @@ router.patch('/commission/mark-paid', markCommissionPaid);
 // Parameterized routes last
 router.get('/', getPayroll);
 router.get('/:id', getPayrollById);
+router.patch('/:id/status', updatePayrollStatus);
 
 export default router;

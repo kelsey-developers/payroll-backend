@@ -50,7 +50,7 @@ export async function getPayroll(req: Request, res: Response) {
 
   let query = supabase
     .from('payroll_records')
-    .select('*, employees(*)')
+    .select('*')
     .order('created_at', { ascending: false });
 
   if (type && type !== 'all') {
@@ -64,7 +64,29 @@ export async function getPayroll(req: Request, res: Response) {
     return;
   }
 
-  res.json((data ?? []).map(mapPayrollRecord));
+  const records = data ?? [];
+
+  // Fetch employee data separately to avoid FK join dependency
+  const employeeIds = [...new Set(records.map((r) => r.employee_id).filter(Boolean))];
+  let employeeMap: Record<number, Record<string, unknown>> = {};
+
+  if (employeeIds.length > 0) {
+    const { data: employees } = await supabase
+      .from('employees')
+      .select('*')
+      .in('employee_id', employeeIds);
+
+    if (employees) {
+      employeeMap = Object.fromEntries(employees.map((e) => [e.employee_id, e]));
+    }
+  }
+
+  const merged = records.map((r) => ({
+    ...r,
+    employees: r.employee_id ? (employeeMap[r.employee_id] ?? null) : null,
+  }));
+
+  res.json(merged.map(mapPayrollRecord));
 }
 
 // GET /api/payroll/:id
@@ -73,7 +95,7 @@ export async function getPayrollById(req: Request, res: Response) {
 
   const { data: payroll, error: payrollError } = await supabase
     .from('payroll_records')
-    .select('*, employees(*)')
+    .select('*')
     .eq('id', id)
     .single();
 
@@ -82,7 +104,18 @@ export async function getPayrollById(req: Request, res: Response) {
     return;
   }
 
-  const normalized = mapPayrollRecord(payroll);
+  // Fetch employee data separately
+  let employeeData = null;
+  if (payroll.employee_id) {
+    const { data: emp } = await supabase
+      .from('employees')
+      .select('*')
+      .eq('employee_id', payroll.employee_id)
+      .single();
+    employeeData = emp ?? null;
+  }
+
+  const normalized = mapPayrollRecord({ ...payroll, employees: employeeData });
 
   if (payroll.employment_type === 'COMMISSION') {
     const { data: commissions, error: commError } = await supabase
@@ -244,6 +277,38 @@ export async function generatePayroll(req: Request, res: Response) {
   }
 
   res.status(201).json(data);
+}
+
+// PATCH /api/payroll/:id/status
+// Workflow: pending → approved → processed → paid  (or → declined)
+export async function updatePayrollStatus(req: Request, res: Response) {
+  const { id } = req.params;
+  const { status, payment_date } = req.body;
+
+  const allowed = ['pending', 'approved', 'processed', 'paid', 'declined'];
+  if (!status || !allowed.includes(status)) {
+    res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+    return;
+  }
+
+  const updates: Record<string, unknown> = { status };
+  if (status === 'paid' && payment_date) {
+    updates.payment_date = payment_date;
+  }
+
+  const { data, error } = await supabase
+    .from('payroll_records')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  res.json(data);
 }
 
 // GET /api/payroll/preview
