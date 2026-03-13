@@ -14,11 +14,22 @@ import {
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
+// GET all payroll records by employment type (DAILY | MONTHLY | COMMISSION)
 router.get('/by-type/:type', getPayrollByType);
+
+// GET payroll records for a specific employee
 router.get('/employee/:employeeId', getPayrollRecords);
+
+// GET single payroll record by ID  ← must come AFTER /by-type and /employee
 router.get('/:id', getPayrollById);
+
+// POST generate a new payroll record
 router.post('/generate', generatePayroll);
+
+// PATCH mark a commission booking as paid via GCash
 router.patch('/commission/mark-paid', markCommissionPaid);
-router.post('/commissions/:commissionId/receipt', upload.single('receipt'), uploadGcashReceipt);
+
+// POST upload GCash receipt image
+router.post('/commission/:commissionId/receipt', upload.single('receipt'), uploadGcashReceipt);
 
 export default router;

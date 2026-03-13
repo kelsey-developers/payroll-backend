@@ -50,20 +50,22 @@ export const getEmployeeTasks = async (req: Request, res: Response) => {
   return res.json(data);
 };
 
-// POST clock in
+// POST clock in — now saves shift_start and shift_end sent by the frontend
 export const clockIn = async (req: Request, res: Response) => {
-  const { employeeId, siteId, latitude, longitude } = req.body;
+  const { employeeId, siteId, latitude, longitude, work_date, shift_start, shift_end } = req.body;
 
   const { data, error } = await supabase
     .from('dtr_records')
     .insert({
       employee_id: employeeId,
-      work_date: new Date().toISOString().split('T')[0],
-      time_in: new Date().toISOString(),
-      status: 'OPEN',
-      site_id: siteId ?? null,
-      latitude: latitude ?? null,
-      longitude: longitude ?? null,
+      work_date:   work_date ?? new Date().toISOString().split('T')[0],
+      time_in:     new Date().toISOString(),
+      status:      'OPEN',
+      site_id:     siteId      ?? null,
+      latitude:    latitude    ?? null,
+      longitude:   longitude   ?? null,
+      shift_start: shift_start ?? null,   // ← FIX: persist shift selection
+      shift_end:   shift_end   ?? null,   // ← FIX: persist shift selection
     })
     .select()
     .single();
@@ -72,17 +74,31 @@ export const clockIn = async (req: Request, res: Response) => {
   return res.status(201).json(data);
 };
 
-// PATCH clock out
+// PATCH clock out — auto-calculates hours_worked from time_in
 export const clockOut = async (req: Request, res: Response) => {
   const { dtrId } = req.params;
-  const { hoursWorked } = req.body;
+
+  // Fetch the open record to compute hours_worked
+  const { data: existing, error: fetchError } = await supabase
+    .from('dtr_records')
+    .select('time_in')
+    .eq('dtr_id', dtrId)
+    .single();
+
+  if (fetchError) return res.status(500).json({ error: fetchError.message });
+
+  const timeOut = new Date();
+  const timeIn  = existing?.time_in ? new Date(existing.time_in) : timeOut;
+  const hoursWorked = parseFloat(
+    ((timeOut.getTime() - timeIn.getTime()) / 1000 / 3600).toFixed(2)
+  );
 
   const { data, error } = await supabase
     .from('dtr_records')
     .update({
-      time_out: new Date().toISOString(),
+      time_out:     timeOut.toISOString(),
       hours_worked: hoursWorked,
-      status: 'CLOSED',
+      status:       'CLOSED',
     })
     .eq('dtr_id', dtrId)
     .select()
@@ -95,19 +111,27 @@ export const clockOut = async (req: Request, res: Response) => {
 // POST upload task proof photo
 export const uploadTaskProof = async (req: Request, res: Response) => {
   const { dtrId, employeeId } = req.params;
+  const { task_type, location } = req.body;
   const file = req.file;
 
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
   try {
     const path = `${employeeId}/${dtrId}/${Date.now()}.jpg`;
-    const url = await uploadFile('task-proof-photos', path, file.buffer, file.mimetype);
+    const url  = await uploadFile('task-proof-photos', path, file.buffer, file.mimetype);
 
+    // Insert a new task_log row with the uploaded photo URL
     const { data, error } = await supabase
       .from('task_logs')
-      .update({ proof_photo_url: url })
-      .eq('dtr_id', dtrId)
-      .eq('employee_id', employeeId)
+      .insert({
+        employee_id:    Number(employeeId),
+        dtr_id:         Number(dtrId),
+        unit_name:      location  ?? '',
+        task_type:      task_type ?? 'Other',
+        completed_at:   new Date().toISOString(),
+        proof_photo_url: url,
+        status:         'COMPLETED',
+      })
       .select()
       .single();
 
