@@ -50,7 +50,7 @@ export const getEmployeeTasks = async (req: Request, res: Response) => {
   return res.json(data);
 };
 
-// POST clock in — now saves shift_start and shift_end sent by the frontend
+// POST clock in — saves shift_start and shift_end sent by the frontend
 export const clockIn = async (req: Request, res: Response) => {
   const { employeeId, siteId, latitude, longitude, work_date, shift_start, shift_end } = req.body;
 
@@ -64,8 +64,8 @@ export const clockIn = async (req: Request, res: Response) => {
       site_id:     siteId      ?? null,
       latitude:    latitude    ?? null,
       longitude:   longitude   ?? null,
-      shift_start: shift_start ?? null,   // ← FIX: persist shift selection
-      shift_end:   shift_end   ?? null,   // ← FIX: persist shift selection
+      shift_start: shift_start ?? null,
+      shift_end:   shift_end   ?? null,
     })
     .select()
     .single();
@@ -78,7 +78,6 @@ export const clockIn = async (req: Request, res: Response) => {
 export const clockOut = async (req: Request, res: Response) => {
   const { dtrId } = req.params;
 
-  // Fetch the open record to compute hours_worked
   const { data: existing, error: fetchError } = await supabase
     .from('dtr_records')
     .select('time_in')
@@ -120,17 +119,16 @@ export const uploadTaskProof = async (req: Request, res: Response) => {
     const path = `${employeeId}/${dtrId}/${Date.now()}.jpg`;
     const url  = await uploadFile('task-proof-photos', path, file.buffer, file.mimetype);
 
-    // Insert a new task_log row with the uploaded photo URL
     const { data, error } = await supabase
       .from('task_logs')
       .insert({
-        employee_id:    Number(employeeId),
-        dtr_id:         Number(dtrId),
-        unit_name:      location  ?? '',
-        task_type:      task_type ?? 'Other',
-        completed_at:   new Date().toISOString(),
+        employee_id:     Number(employeeId),
+        dtr_id:          Number(dtrId),
+        unit_name:       location  ?? '',
+        task_type:       task_type ?? 'Other',
+        completed_at:    new Date().toISOString(),
         proof_photo_url: url,
-        status:         'COMPLETED',
+        status:          'COMPLETED',
       })
       .select()
       .single();
@@ -141,3 +139,154 @@ export const uploadTaskProof = async (req: Request, res: Response) => {
     return res.status(500).json({ error: err.message });
   }
 };
+
+// GET /api/dtr/range?employee_id=1&start=2024-01-01&end=2024-01-15
+export async function getDTRRange(req: Request, res: Response) {
+  const { employee_id, start, end } = req.query;
+
+  if (!employee_id || !start || !end) {
+    res.status(400).json({ error: 'employee_id, start, and end are required' });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('dtr_records')
+    .select('*')
+    .eq('employee_id', employee_id)
+    .gte('work_date', start)
+    .lte('work_date', end)
+    .order('work_date', { ascending: true });
+
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  res.json(data ?? []);
+}
+
+// GET /api/dtr/all?start=2024-01-01&end=2024-01-15
+// Admin view — all employees' attendance for a date range
+export async function getAllDTR(req: Request, res: Response) {
+  const { start, end } = req.query;
+
+  if (!start || !end) {
+    res.status(400).json({ error: 'start and end are required' });
+    return;
+  }
+
+  const { data: records, error } = await supabase
+    .from('dtr_records')
+    .select('*')
+    .gte('work_date', start)
+    .lte('work_date', end)
+    .order('work_date', { ascending: false });
+
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  const rows = records ?? [];
+  const employeeIds = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
+  let employeeMap: Record<number, Record<string, unknown>> = {};
+
+  if (employeeIds.length > 0) {
+    const { data: employees } = await supabase
+      .from('employees')
+      .select('employee_id, full_name, position, employment_type')
+      .in('employee_id', employeeIds);
+
+    if (employees) {
+      employeeMap = Object.fromEntries(employees.map((e) => [e.employee_id, e]));
+    }
+  }
+
+  res.json(rows.map((r) => ({ ...r, employee: employeeMap[r.employee_id] ?? null })));
+}
+
+// PATCH /api/dtr/:id/verify
+// Manager verifies or disputes a DTR record
+export async function verifyDTR(req: Request, res: Response) {
+  const { id } = req.params;
+  const { verified, notes } = req.body;
+
+  if (verified === undefined) {
+    res.status(400).json({ error: 'verified (true/false) is required' });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('dtr_records')
+    .update({
+      is_verified:        verified,
+      verification_notes: notes ?? null,
+      verified_at:        new Date().toISOString(),
+    })
+    .eq('dtr_id', id)
+    .select()
+    .single();
+
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  res.json(data);
+}
+
+// GET /api/dtr/summary?start=2024-01-01&end=2024-01-15
+// Returns days worked per employee — used to auto-fill payroll generation
+export async function getDTRSummary(req: Request, res: Response) {
+  const { start, end } = req.query;
+
+  if (!start || !end) {
+    res.status(400).json({ error: 'start and end are required' });
+    return;
+  }
+
+  const { data: records, error } = await supabase
+    .from('dtr_records')
+    .select('employee_id, work_date, status, hours_worked')
+    .gte('work_date', start)
+    .lte('work_date', end)
+    .eq('status', 'CLOSED');
+
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  const rows = records ?? [];
+  const employeeIds = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
+  let employeeMap: Record<number, Record<string, unknown>> = {};
+
+  if (employeeIds.length > 0) {
+    const { data: employees } = await supabase
+      .from('employees')
+      .select('employee_id, full_name, position, employment_type, current_rate')
+      .in('employee_id', employeeIds);
+
+    if (employees) {
+      employeeMap = Object.fromEntries(employees.map((e) => [e.employee_id, e]));
+    }
+  }
+
+  const summaryMap: Record<number, { days_worked: number; total_hours: number }> = {};
+  for (const r of rows) {
+    if (!summaryMap[r.employee_id]) {
+      summaryMap[r.employee_id] = { days_worked: 0, total_hours: 0 };
+    }
+    summaryMap[r.employee_id].days_worked += 1;
+    summaryMap[r.employee_id].total_hours += r.hours_worked ?? 0;
+  }
+
+  const summary = Object.entries(summaryMap).map(([empId, stats]) => ({
+    employee_id:  Number(empId),
+    employee:     employeeMap[Number(empId)] ?? null,
+    days_worked:  stats.days_worked,
+    total_hours:  parseFloat(stats.total_hours.toFixed(2)),
+  }));
+
+  res.json(summary);
+}
