@@ -7,6 +7,8 @@ import {
   getPayrollById,
   getPayrollRecords,
   generatePayroll,
+  updatePayroll,
+  deletePayroll,
   markCommissionPaid,
   uploadGcashReceipt,
 } from '../controllers/payrollController';
@@ -20,11 +22,17 @@ router.get('/by-type/:type', getPayrollByType);
 // GET payroll records for a specific employee
 router.get('/employee/:employeeId', getPayrollRecords);
 
-// GET single payroll record by ID  ← must come AFTER /by-type and /employee
+// GET single payroll record by ID
 router.get('/:id', getPayrollById);
 
 // POST generate a new payroll record
 router.post('/generate', generatePayroll);
+
+// PATCH update (edit) a payroll record
+router.patch('/:id', updatePayroll);
+
+// DELETE a payroll record
+router.delete('/:id', deletePayroll);
 
 // PATCH mark a commission booking as paid via GCash
 router.patch('/commission/mark-paid', markCommissionPaid);
