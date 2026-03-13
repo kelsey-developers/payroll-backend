@@ -9,33 +9,77 @@ import {
   computeCommissionPayout,
 } from '../lib/payrollCalculator';
 
+// Helper — normalizes a raw payroll_records row
+function mapPayrollRecord(record: Record<string, any>) {
+  return record;
+}
+
 // GET all payroll records by employment type
 export const getPayrollByType = async (req: Request, res: Response) => {
   const { type } = req.params;
 
   const { data, error } = await supabase
     .from('payroll_records')
-    .select('*, employees(*)')
+    .select('*')
     .eq('employment_type', type)
     .order('created_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json(data);
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  const records = data ?? [];
+
+  const employeeIds = [...new Set(records.map((r) => r.employee_id).filter(Boolean))];
+  let employeeMap: Record<number, Record<string, unknown>> = {};
+
+  if (employeeIds.length > 0) {
+    const { data: employees } = await supabase
+      .from('employees')
+      .select('*')
+      .in('employee_id', employeeIds);
+
+    if (employees) {
+      employeeMap = Object.fromEntries(employees.map((e) => [e.employee_id, e]));
+    }
+  }
+
+  const merged = records.map((r) => ({
+    ...r,
+    employees: r.employee_id ? (employeeMap[r.employee_id] ?? null) : null,
+  }));
+
+  res.json(merged.map(mapPayrollRecord));
 };
 
 // GET single payroll record by ID
-export const getPayrollById = async (req: Request, res: Response) => {
+export async function getPayrollById(req: Request, res: Response) {
   const { id } = req.params;
 
-  const { data, error } = await supabase
+  const { data: payroll, error } = await supabase
     .from('payroll_records')
-    .select('*, employees(*)')
+    .select('*')
     .eq('id', id)
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json(data);
-};
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+
+  let employeeData = null;
+  if (payroll.employee_id) {
+    const { data: emp } = await supabase
+      .from('employees')
+      .select('*')
+      .eq('employee_id', payroll.employee_id)
+      .single();
+    employeeData = emp ?? null;
+  }
+
+  res.json(mapPayrollRecord({ ...payroll, employees: employeeData }));
+}
 
 // GET payroll records for a specific employee
 export const getPayrollRecords = async (req: Request, res: Response) => {
@@ -53,12 +97,7 @@ export const getPayrollRecords = async (req: Request, res: Response) => {
 
 // POST generate payroll
 export const generatePayroll = async (req: Request, res: Response) => {
-  const {
-    employee_id,
-    pay_period_start,
-    pay_period_end,
-    commission_rate, // optional override from frontend
-  } = req.body;
+  const { employee_id, pay_period_start, pay_period_end, commission_rate } = req.body;
 
   if (!employee_id || !pay_period_start || !pay_period_end) {
     return res.status(400).json({
@@ -66,7 +105,6 @@ export const generatePayroll = async (req: Request, res: Response) => {
     });
   }
 
-  // Fetch employee
   const { data: employee, error: empError } = await supabase
     .from('employees')
     .select('*')
@@ -77,7 +115,6 @@ export const generatePayroll = async (req: Request, res: Response) => {
     return res.status(500).json({ message: empError?.message ?? 'Employee not found' });
   }
 
-  // Fetch closed DTR records in the pay period
   const { data: dtrRecords, error: dtrError } = await supabase
     .from('dtr_records')
     .select('*')
@@ -88,17 +125,14 @@ export const generatePayroll = async (req: Request, res: Response) => {
 
   if (dtrError) return res.status(500).json({ message: dtrError.message });
 
-  // Generate unique ID and reference number
   const timestamp       = Date.now();
   const payrollId       = `PR-${employee_id}-${timestamp}`;
   const referenceNumber = `REF-${employee.employment_type.charAt(0)}-${timestamp}`;
 
-  // Base payroll object — include agent_id if present on employee
   let payrollData: Record<string, any> = {
     id:               payrollId,
     reference_number: referenceNumber,
     employee_id,
-    // FIX: populate agent_id from the employee record (column exists in table)
     agent_id:         employee.agent_id ?? null,
     employment_type:  employee.employment_type,
     pay_period_start,
@@ -117,7 +151,7 @@ export const generatePayroll = async (req: Request, res: Response) => {
       overtime_pay:     0,
       gross_income:     result.totalPay,
       total_deductions: 0,
-      net_pay:          result.totalPay, // ✅ correct column name
+      net_pay:          result.totalPay,
     };
 
   } else if (employee.employment_type === 'MONTHLY') {
@@ -131,12 +165,10 @@ export const generatePayroll = async (req: Request, res: Response) => {
       bonus_amount:     0,
       gross_income:     result.totalPay,
       total_deductions: 0,
-      net_pay:          result.totalPay, // ✅ correct column name
+      net_pay:          result.totalPay,
     };
 
   } else if (employee.employment_type === 'COMMISSION') {
-    // FIX: filter by employee_id using agent_id column in booking_commissions
-    // Try agent_id first; fall back to querying all unpaid in range if agent_id is null
     const commissionQuery = supabase
       .from('booking_commissions')
       .select('commission_amount')
@@ -144,30 +176,17 @@ export const generatePayroll = async (req: Request, res: Response) => {
       .gte('booking_date', pay_period_start)
       .lte('booking_date', pay_period_end);
 
-    // Only filter by agent_id if the employee has one
     if (employee.agent_id) {
       commissionQuery.eq('agent_id', employee.agent_id);
     }
 
     const { data: commissions, error: commError } = await commissionQuery;
-
     if (commError) return res.status(500).json({ message: commError.message });
-
-    // Use commission_rate from frontend if provided, otherwise use employee record
-    const rateToUse = commission_rate ?? employee.commission_rate ?? 0;
 
     const amounts = (commissions ?? []).map((c: any) => Number(c.commission_amount));
     const result  = computeCommissionPayout(amounts);
 
-    // Only insert columns that exist in payroll_records schema:
-    // id, employee_id, agent_id, employment_type, pay_period_start,
-    // pay_period_end, status, reference_number, net_pay
-    // Commission-specific columns (total_bookings, total_commission_amount, taxes)
-    // do NOT exist in the table — omit them to avoid schema cache errors.
-    payrollData = {
-      ...payrollData,
-      net_pay: result.netPayout,
-    };
+    payrollData = { ...payrollData, net_pay: result.netPayout };
   }
 
   const { data, error } = await supabase
@@ -226,22 +245,39 @@ export const uploadGcashReceipt = async (req: Request, res: Response) => {
   }
 };
 
-// PATCH update payroll record (edit)
+// PATCH /api/payroll/:id/status
+// Workflow: pending → approved → processed → paid (or → declined)
+export async function updatePayrollStatus(req: Request, res: Response) {
+  const { id } = req.params;
+  const { status, payment_date } = req.body;
+
+  const allowed = ['pending', 'approved', 'processed', 'paid', 'declined'];
+  if (!status || !allowed.includes(status)) {
+    res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+    return;
+  }
+
+  const updates: Record<string, unknown> = { status };
+  if (status === 'paid' && payment_date) updates.payment_date = payment_date;
+
+  const { data, error } = await supabase
+    .from('payroll_records')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  res.json(data);
+}
+
+// PATCH update payroll record (full edit)
 export const updatePayroll = async (req: Request, res: Response) => {
   const { id } = req.params;
   const {
-    status,
-    pay_period_start,
-    pay_period_end,
-    daily_rate,
-    monthly_rate,
-    overtime_hours,
-    overtime_pay,
-    bonus_amount,
-    total_deductions,
-    base_pay,
-    gross_income,
-    net_pay,
+    status, pay_period_start, pay_period_end, daily_rate, monthly_rate,
+    overtime_hours, overtime_pay, bonus_amount, total_deductions,
+    base_pay, gross_income, net_pay,
   } = req.body;
 
   const updates: Record<string, any> = {};

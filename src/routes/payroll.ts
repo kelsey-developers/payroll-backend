@@ -8,6 +8,7 @@ import {
   getPayrollRecords,
   generatePayroll,
   updatePayroll,
+  updatePayrollStatus,
   deletePayroll,
   markCommissionPaid,
   uploadGcashReceipt,
@@ -16,28 +17,19 @@ import {
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// GET all payroll records by employment type (DAILY | MONTHLY | COMMISSION)
-router.get('/by-type/:type', getPayrollByType);
+// Static/specific routes first
+router.get('/by-type/:type',          getPayrollByType);
+router.get('/employee/:employeeId',   getPayrollRecords);
+router.post('/generate',              generatePayroll);
 
-// GET payroll records for a specific employee
-router.get('/employee/:employeeId', getPayrollRecords);
-
-// GET single payroll record by ID
-router.get('/:id', getPayrollById);
-
-// POST generate a new payroll record
-router.post('/generate', generatePayroll);
-
-// PATCH update (edit) a payroll record
-router.patch('/:id', updatePayroll);
-
-// DELETE a payroll record
-router.delete('/:id', deletePayroll);
-
-// PATCH mark a commission booking as paid via GCash
+// Commission routes (must be before /:id to avoid param capture)
 router.patch('/commission/mark-paid', markCommissionPaid);
-
-// POST upload GCash receipt image
 router.post('/commission/:commissionId/receipt', upload.single('receipt'), uploadGcashReceipt);
+
+// Parameterized routes last
+router.get('/:id',          getPayrollById);
+router.patch('/:id/status', updatePayrollStatus);
+router.patch('/:id',        updatePayroll);
+router.delete('/:id',       deletePayroll);
 
 export default router;

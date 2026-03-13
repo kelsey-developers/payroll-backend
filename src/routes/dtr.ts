@@ -9,27 +9,33 @@ import {
   clockIn,
   clockOut,
   uploadTaskProof,
+  getDTRRange,
+  getAllDTR,
+  verifyDTR,
+  getDTRSummary,
 } from '../controllers/dtrController';
 
-const router  = express.Router();
-const upload  = multer({ storage: multer.memoryStorage() });
+const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
-// GET all DTR records for an employee
-router.get('/employee/:employeeId', getDTRByEmployee);
+// Specific/static routes first (must come before param routes)
+router.get('/range',   getDTRRange);
+router.get('/all',     getAllDTR);
+router.get('/summary', getDTRSummary);
 
-// GET today's DTR record for an employee
-router.get('/employee/:employeeId/today', getTodayDTR);
+// Employee-scoped routes
+router.get('/employee/:employeeId',        getDTRByEmployee);
+router.get('/employee/:employeeId/today',  getTodayDTR);
+router.get('/employee/:employeeId/tasks',  getEmployeeTasks);
 
-// GET task logs for an employee
-router.get('/employee/:employeeId/tasks', getEmployeeTasks);
-
-// POST clock in
-router.post('/clock-in', clockIn);
-
-// PATCH clock out
+// Clock in / out
+router.post('/clock-in',          clockIn);
 router.patch('/:dtrId/clock-out', clockOut);
 
-// POST upload task proof photo
+// Task proof upload
 router.post('/:dtrId/employee/:employeeId/proof', upload.single('photo'), uploadTaskProof);
+
+// Verify DTR (manager)
+router.patch('/:id/verify', verifyDTR);
 
 export default router;
