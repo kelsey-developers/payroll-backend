@@ -83,6 +83,15 @@ export async function generatePeriod(req: Request, res: Response) {
        FROM employees WHERE status = 'active'`
     ) as [any[], any];
 
+    // Insert the payroll period row FIRST so that payroll_period_employees FK is satisfied
+    await conn.query(
+      `INSERT INTO payroll_periods
+         (payroll_id, period_start, period_end, status,
+          total_gross, total_deductions, total_net_pay, employee_count, notes)
+       VALUES (?, ?, ?, 'pending', 0, 0, 0, 0, ?)`,
+      [payroll_id, period_start, period_end, notes ?? null]
+    );
+
     let totalGross = 0, totalDeductions = 0, totalNetPay = 0, employeeCount = 0;
 
     for (const emp of employees) {
@@ -161,18 +170,17 @@ export async function generatePeriod(req: Request, res: Response) {
       employeeCount   += 1;
     }
 
+    // Update the totals now that we've processed all employees
     await conn.query(
-      `INSERT INTO payroll_periods
-         (payroll_id, period_start, period_end, status,
-          total_gross, total_deductions, total_net_pay, employee_count, notes)
-       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+      `UPDATE payroll_periods
+       SET total_gross = ?, total_deductions = ?, total_net_pay = ?, employee_count = ?
+       WHERE payroll_id = ?`,
       [
-        payroll_id, period_start, period_end,
         parseFloat(totalGross.toFixed(2)),
         parseFloat(totalDeductions.toFixed(2)),
         parseFloat(totalNetPay.toFixed(2)),
         employeeCount,
-        notes ?? null,
+        payroll_id,
       ]
     );
 
