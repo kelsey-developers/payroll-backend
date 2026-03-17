@@ -1,60 +1,13 @@
 import { Request, Response } from 'express';
 import { pool } from '../lib/db';
 
-const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? 'http://localhost:3000';
-const ALLOWED_ROLES = ['Finance', 'Inventory', 'Housekeeping'];
-
-// GET /api/employees - fetches from auth-service /api/users, filtered by finance/inventory/housekeeping
+// GET /api/employees - fetches from local employees table
 export async function listEmployees(req: Request, res: Response) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Authorization token required' });
-      return;
-    }
-
-    const token = authHeader.substring(7);
-    const headers = { Authorization: `Bearer ${token}` };
-
-    // Fetch users for each allowed role and merge (auth /api/users supports role filter)
-    const allUsers: Record<string, any> = {};
-    for (const role of ALLOWED_ROLES) {
-      const resp = await fetch(
-        `${AUTH_SERVICE_URL}/api/users?role=${encodeURIComponent(role)}&limit=100`,
-        { headers }
-      );
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        res.status(resp.status).json(err.error ? { error: err.error } : { error: 'Failed to fetch users' });
-        return;
-      }
-      const data = await resp.json();
-      for (const u of data.users ?? []) {
-        if (!allUsers[u.id]) allUsers[u.id] = u;
-      }
-    }
-
-    const users = Object.values(allUsers)
-      .filter((u) => {
-        const roles = (u.roles ?? []).map((r: string) => String(r));
-        return roles.some((r: string) => ALLOWED_ROLES.includes(r));
-      })
-      .sort((a, b) => (a.fullname || '').localeCompare(b.fullname || ''));
-
-    const employees = users.map((u) => ({
-      employee_id: u.id,
-      employee_code: null,
-      full_name: u.fullname ?? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim(),
-      hire_date: null,
-      position: null,
-      employment_type: null,
-      current_rate: null,
-      role: (u.roles ?? []).find((r: string) => ALLOWED_ROLES.includes(String(r))) ?? null,
-      status: u.status ?? 'active',
-      created_at: u.createdAt,
-    }));
-
-    res.json(employees);
+    const [rows] = await pool.query(
+      `SELECT * FROM employees ORDER BY full_name ASC`
+    );
+    res.json(rows);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -77,17 +30,19 @@ export async function getEmployee(req: Request, res: Response) {
 
 // POST /api/employees
 export async function createEmployee(req: Request, res: Response) {
-  const { full_name, hire_date, position, employment_type, current_rate, role } = req.body;
+  const { full_name, email, hire_date, position, employment_type, current_rate, role } = req.body;
   if (!full_name || !hire_date || !position || !employment_type || current_rate === undefined) {
     res.status(400).json({ error: 'full_name, hire_date, position, employment_type, and current_rate are required' });
     return;
   }
   try {
-    const employee_code = `EMP-${Date.now()}`;
+    const [countRows] = await pool.query(`SELECT COUNT(*) AS total FROM employees`);
+    const nextNum = ((countRows as any[])[0].total as number) + 1;
+    const employee_code = `EMP_${nextNum}`;
     const [result] = await pool.query(
-      `INSERT INTO employees (employee_code, full_name, hire_date, position, employment_type, current_rate, role, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
-      [employee_code, full_name, hire_date, position, employment_type, Number(current_rate), role ?? 'employee']
+      `INSERT INTO employees (employee_code, full_name, email, hire_date, position, employment_type, current_rate, role, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+      [employee_code, full_name, email ?? null, hire_date, position, employment_type, Number(current_rate), role ?? 'employee']
     );
     const insertId = (result as any).insertId;
     const [rows] = await pool.query(`SELECT * FROM employees WHERE employee_id = ?`, [insertId]);
@@ -99,11 +54,12 @@ export async function createEmployee(req: Request, res: Response) {
 
 // PUT /api/employees/:id
 export async function updateEmployee(req: Request, res: Response) {
-  const { full_name, hire_date, position, employment_type, current_rate, role, status } = req.body;
+  const { full_name, email, hire_date, position, employment_type, current_rate, role, status } = req.body;
   try {
     await pool.query(
       `UPDATE employees SET
         full_name       = COALESCE(?, full_name),
+        email           = COALESCE(?, email),
         hire_date       = COALESCE(?, hire_date),
         position        = COALESCE(?, position),
         employment_type = COALESCE(?, employment_type),
@@ -112,7 +68,7 @@ export async function updateEmployee(req: Request, res: Response) {
         status          = COALESCE(?, status)
        WHERE employee_id = ?`,
       [
-        full_name   ?? null, hire_date ?? null, position ?? null, employment_type ?? null,
+        full_name   ?? null, email ?? null, hire_date ?? null, position ?? null, employment_type ?? null,
         current_rate !== undefined ? Number(current_rate) : null,
         role ?? null, status ?? null,
         req.params.id,
@@ -132,6 +88,50 @@ export async function deleteEmployee(req: Request, res: Response) {
   try {
     await pool.query(`DELETE FROM employees WHERE employee_id = ?`, [req.params.id]);
     res.json({ message: 'Employee deleted' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// GET /api/employees/roles — no auth required, used by frontend to resolve employee role from email
+// Returns { "email@example.com": "employee", ... } for all active employees with an email on file
+export async function getEmployeeRoles(req: Request, res: Response) {
+  try {
+    const [rows] = await pool.query(
+      `SELECT email FROM employees WHERE status = 'active' AND email IS NOT NULL`
+    );
+    const map: Record<string, string> = {};
+    for (const row of rows as { email: string }[]) {
+      map[row.email.toLowerCase()] = 'employee';
+    }
+    res.json(map);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// PATCH /api/employees/roles — no auth required
+// Body: { email, name?, role }
+// Used by manage-users to assign the "Employee" role without hitting the auth service.
+// If an employee record with this email exists, we confirm it. Otherwise we acknowledge silently.
+export async function patchEmployeeRole(req: Request, res: Response) {
+  const { email, role } = req.body as { email?: string; role?: string };
+  if (!email) {
+    res.status(400).json({ error: 'email is required' });
+    return;
+  }
+  try {
+    const [rows] = await pool.query(
+      `SELECT employee_id FROM employees WHERE LOWER(email) = LOWER(?) LIMIT 1`,
+      [email]
+    );
+    const found = (rows as any[]).length > 0;
+    res.json({
+      message: found ? 'Employee role confirmed' : 'Role noted (no payroll record found for this email)',
+      email,
+      role: role ?? 'Employee',
+      roles: [role ?? 'Employee'],
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

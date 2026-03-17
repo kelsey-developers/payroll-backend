@@ -5,8 +5,8 @@ services:
     image: mysql:8
     container_name: kelsey_payroll_db
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: kelsey_payroll
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_DATABASE: ${DB_NAME:-kelsey_payroll}
     ports:
       - "3306:3306"
     volumes:
@@ -17,6 +17,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  api:
+    build: .
+    container_name: kelsey_payroll_api
+    ports:
+      - "${PORT:-4000}:4000"
+    env_file:
+      - .env
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   mysql_data:

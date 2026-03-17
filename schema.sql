@@ -18,6 +18,7 @@ CREATE TABLE employees (
     employee_id     BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     employee_code   VARCHAR(50) NOT NULL UNIQUE,
     full_name       VARCHAR(200) NOT NULL,
+    email           VARCHAR(255) NULL UNIQUE,
     hire_date       DATE NOT NULL,
     position        VARCHAR(100) NOT NULL,
     employment_type ENUM('DAILY','MONTHLY','COMMISSION') NOT NULL DEFAULT 'DAILY',
@@ -42,7 +43,13 @@ CREATE TABLE dtr_records (
     hours_worked    DECIMAL(5,2) NOT NULL DEFAULT 0.00,
     overtime_hours  DECIMAL(5,2) NOT NULL DEFAULT 0.00,
     status          ENUM('OPEN','CLOSED') NOT NULL DEFAULT 'OPEN',
+    shift_start     TIME NULL,
+    shift_end       TIME NULL,
     notes           TEXT NULL,
+    photo_in        MEDIUMTEXT NULL,
+    photo_out       MEDIUMTEXT NULL,
+    ip_in           VARCHAR(45) NULL,
+    ip_out          VARCHAR(45) NULL,
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -122,4 +129,16 @@ CREATE TABLE payroll_period_employees (
 
     CONSTRAINT uq_ppe_payroll_employee
         UNIQUE (payroll_id, employee_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================
+-- EMPLOYEE REGISTRATIONS
+-- =========================
+CREATE TABLE IF NOT EXISTS employee_registrations (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    full_name  VARCHAR(255) NOT NULL,
+    email      VARCHAR(255) NOT NULL,
+    message    TEXT NULL,
+    status     ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
