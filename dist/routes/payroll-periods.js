@@ -2,10 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const payrollPeriodController_1 = require("../controllers/payrollPeriodController");
+const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
-router.get('/', payrollPeriodController_1.listPeriods);
-router.post('/generate', payrollPeriodController_1.generatePeriod);
-router.get('/:id', payrollPeriodController_1.getPeriod);
-router.patch('/:id', payrollPeriodController_1.updatePeriodStatus);
-router.delete('/:id', payrollPeriodController_1.deletePeriod);
+router.get('/', auth_1.requireAuth, payrollPeriodController_1.listPeriods);
+router.post('/generate', auth_1.requireAuth, payrollPeriodController_1.generatePeriod);
+router.get('/:id', auth_1.requireAuth, payrollPeriodController_1.getPeriod);
+router.patch('/:id', auth_1.requireAuth, payrollPeriodController_1.updatePeriodStatus);
+router.delete('/:id', auth_1.requireAuth, payrollPeriodController_1.deletePeriod);
 exports.default = router;
