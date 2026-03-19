@@ -78,6 +78,11 @@ async function generatePeriod(req, res) {
         const periodDays = Math.max(1, (new Date(period_end).getTime() - new Date(period_start).getTime()) / 86400000 + 1);
         const [employees] = await conn.query(`SELECT employee_id, employment_type, current_rate, hire_date
        FROM employees WHERE status = 'active'`);
+        // Insert the payroll period row FIRST so that payroll_period_employees FK is satisfied
+        await conn.query(`INSERT INTO payroll_periods
+         (payroll_id, period_start, period_end, status,
+          total_gross, total_deductions, total_net_pay, employee_count, notes)
+       VALUES (?, ?, ?, 'pending', 0, 0, 0, 0, ?)`, [payroll_id, period_start, period_end, notes ?? null]);
         let totalGross = 0, totalDeductions = 0, totalNetPay = 0, employeeCount = 0;
         for (const emp of employees) {
             // Effective start = max(period_start, hire_date)
@@ -135,16 +140,15 @@ async function generatePeriod(req, res) {
             totalNetPay += netPay;
             employeeCount += 1;
         }
-        await conn.query(`INSERT INTO payroll_periods
-         (payroll_id, period_start, period_end, status,
-          total_gross, total_deductions, total_net_pay, employee_count, notes)
-       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`, [
-            payroll_id, period_start, period_end,
+        // Update the totals now that we've processed all employees
+        await conn.query(`UPDATE payroll_periods
+       SET total_gross = ?, total_deductions = ?, total_net_pay = ?, employee_count = ?
+       WHERE payroll_id = ?`, [
             parseFloat(totalGross.toFixed(2)),
             parseFloat(totalDeductions.toFixed(2)),
             parseFloat(totalNetPay.toFixed(2)),
             employeeCount,
-            notes ?? null,
+            payroll_id,
         ]);
         await conn.commit();
         const [rows] = await conn.query(`SELECT * FROM payroll_periods WHERE payroll_id = ?`, [payroll_id]);
